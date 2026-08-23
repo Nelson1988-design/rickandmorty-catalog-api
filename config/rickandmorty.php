@@ -17,10 +17,10 @@ return [
     'retry_times' => (int) env('RICKANDMORTY_RETRY_TIMES', 3),
     'retry_delay' => (int) env('RICKANDMORTY_RETRY_DELAY', 200),
 
-    // Milliseconds to wait before every request. The provider rate limits at
-    // around thirty rapid calls and a full synchronisation makes about fifty,
-    // so this is measured avoidance rather than a guess. Retries handle the
-    // unforeseen; this handles the known.
-    'page_delay' => (int) env('RICKANDMORTY_PAGE_DELAY', 250),
+    // Milliseconds to wait before every request, measured rather than guessed.
+    // The provider rate limits a full synchronisation, which is 52 requests:
+    // unpaced it stopped at request 31, at 250 ms it reached 44, and at 600 ms
+    // it completes. Retries exist for the unforeseen; this is for the known.
+    'page_delay' => (int) env('RICKANDMORTY_PAGE_DELAY', 600),
 
 ];
