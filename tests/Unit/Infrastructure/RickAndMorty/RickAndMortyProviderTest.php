@@ -33,6 +33,7 @@ final class RickAndMortyProviderTest extends TestCase
         config()->set('rickandmorty.timeout', 5);
         config()->set('rickandmorty.retry_times', 3);
         config()->set('rickandmorty.retry_delay', 0);
+        config()->set('rickandmorty.page_delay', 0);
 
         Http::preventStrayRequests();
 

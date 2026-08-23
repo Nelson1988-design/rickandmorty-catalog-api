@@ -75,6 +75,12 @@ final class RickAndMortyProvider implements CatalogProvider
         $attempts = max(1, (int) config('rickandmorty.retry_times'));
         $delay = max(0, (int) config('rickandmorty.retry_delay'));
 
+        // The provider paces itself. Its rate limit is a property of this
+        // provider, not of whoever is calling, so callers never have to know
+        // about it — and code above the port never has to read a config key
+        // named after a vendor in order to be well behaved.
+        $this->pause();
+
         try {
             $response = Http::acceptJson()
                 ->connectTimeout((int) config('rickandmorty.connect_timeout'))
@@ -121,6 +127,15 @@ final class RickAndMortyProvider implements CatalogProvider
         $status = $failure->response->status();
 
         return $status === 429 || $status >= 500;
+    }
+
+    private function pause(): void
+    {
+        $milliseconds = max(0, (int) config('rickandmorty.page_delay'));
+
+        if ($milliseconds > 0) {
+            usleep($milliseconds * 1000);
+        }
     }
 
     /**

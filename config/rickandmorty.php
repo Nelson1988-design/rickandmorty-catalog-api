@@ -17,4 +17,10 @@ return [
     'retry_times' => (int) env('RICKANDMORTY_RETRY_TIMES', 3),
     'retry_delay' => (int) env('RICKANDMORTY_RETRY_DELAY', 200),
 
+    // Milliseconds to wait before every request. The provider rate limits at
+    // around thirty rapid calls and a full synchronisation makes about fifty,
+    // so this is measured avoidance rather than a guess. Retries handle the
+    // unforeseen; this handles the known.
+    'page_delay' => (int) env('RICKANDMORTY_PAGE_DELAY', 250),
+
 ];
