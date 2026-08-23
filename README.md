@@ -183,6 +183,94 @@ La API externa aplica un límite de peticiones, así que el cliente espera 600 m
 
 ---
 
+## La API
+
+Todo cuelga de `http://localhost:8080/api/v1`.
+
+### Autenticación
+
+Registrarse devuelve la cuenta y un token. **Es el único momento en que el token es legible**: en la base de datos solo queda su hash.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/register \
+  -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -d '{"name":"Nelson","email":"nelson@example.test","password":"a-password-nobody-guesses"}'
+```
+
+```json
+{ "token": "bCeqdrYUwr7d…", "user": { "id": 1, "name": "Nelson", "email": "nelson@example.test" } }
+```
+
+A partir de ahí, en la cabecera:
+
+```bash
+curl http://localhost:8080/api/v1/favorites -H 'Authorization: Bearer TU-TOKEN'
+```
+
+Los tokens caducan a las **24 horas**, ajustable con `API_TOKEN_LIFETIME_HOURS`. Iniciar sesión desde otro dispositivo emite un token distinto sin invalidar el anterior, y cerrar sesión revoca **solo el token que se usó** para hacerlo.
+
+### Endpoints
+
+| Método | Ruta | Token | |
+|---|---|:---:|---|
+| `POST` | `/register` | — | Crea la cuenta y devuelve un token |
+| `POST` | `/login` | — | Devuelve un token nuevo |
+| `POST` | `/logout` | ✓ | Revoca el token con el que se llamó |
+| `GET` | `/characters` | — | Listado con filtros |
+| `GET` | `/characters/{id}` | — | Detalle con origen, ubicación actual y episodios |
+| `GET` | `/episodes` | — | Listado |
+| `GET` | `/episodes/{id}` | — | Detalle con sus personajes |
+| `GET` | `/locations` | — | Listado |
+| `GET` | `/locations/{id}` | — | Detalle con sus residentes |
+| `GET` | `/favorites` | ✓ | Los favoritos del usuario |
+| `POST` | `/favorites/{character}` | ✓ | Marca un personaje |
+| `DELETE` | `/favorites/{character}` | ✓ | Lo desmarca |
+
+El catálogo se lee sin token: es un espejo de una fuente pública y una puerta delante no protegería nada. Lo que exige identidad es lo que pertenece a alguien.
+
+**Los identificadores de las URLs son los nuestros**, no los del proveedor. El suyo viaja en cada respuesta como `external_id`, para quien quiera alinear ambos catálogos.
+
+### Filtros
+
+Solo el listado de personajes los tiene, y se combinan entre sí:
+
+```bash
+curl 'http://localhost:8080/api/v1/characters?name=rick&status=dead'
+```
+
+| Filtro | Comportamiento |
+|---|---|
+| `name` | Coincidencia parcial: `rick` encuentra también *Toxic Rick* |
+| `status` | Exacto, uno de `alive`, `dead` o `unknown`. No distingue mayúsculas |
+| `species` | Exacto |
+
+Un valor no reconocido —`?status=undead`— responde `422`. Devolver el catálogo entero a quien pidió otra cosa sería peor que decírselo.
+
+### Paginación
+
+Los listados devuelven 20 elementos con la forma nativa del paginador de Laravel: `data`, `links` y `meta`. La página se elige con `?page=N`. El tamaño es fijo.
+
+### Errores
+
+Toda respuesta de error lleva `message` y `code`; `errors` aparece solo cuando hay errores de campo.
+
+```json
+{ "message": "The provided credentials are incorrect.", "code": "validation_failed",
+  "errors": { "email": ["The provided credentials are incorrect."] } }
+```
+
+| Estado | `code` |
+|---|---|
+| 401 | `unauthenticated` |
+| 403 | `forbidden` |
+| 404 | `not_found` |
+| 405 | `method_not_allowed` |
+| 422 | `validation_failed` |
+| 429 | `too_many_requests` |
+| 5xx | `server_error` |
+
+---
+
 ## Tests
 
 ```bash
@@ -290,6 +378,40 @@ Una referencia a algo que no se sincronizó **aborta la ejecución completa**, p
 El comando de consola es un adaptador de entrada, igual que el cliente HTTP es uno de salida: recibe la invocación, llama al caso de uso y presenta el resultado. Con la lógica fuera, la sincronización completa se prueba inyectando un doble del puerto, sin ejecutar Artisan y sin red.
 
 Tampoco acepta opciones. Un `--resource=character` permitiría saltarse una pasada de la que depende la siguiente, que es justo lo que las claves foráneas convierten en un aborto: un botón que rompe una restricción de corrección no es una funcionalidad.
+
+### Autenticación propia, sin paquetes de terceros
+
+Los tokens viven en su propia tabla, no en una columna de `users`: una columna limitaría a una sesión por persona, y entrar desde el móvil cerraría la del portátil.
+
+Se guarda **el hash `sha256`**, nunca el token. Quien comprometiera la base solo encontraría cadenas irreversibles. Que el hash sea rápido y sin sal es deliberado y es lo contrario de lo que se hace con contraseñas: la entrada ya tiene 40 caracteres de entropía aleatoria, así que no hay nada que romper por fuerza bruta, y la búsqueda ocurre en cada petición.
+
+**La pieza que hace esto viable sin un paquete es un `Guard` nativo.** Implementa el contrato `Illuminate\Contracts\Auth\Guard` y se registra como driver, de modo que el resto de la aplicación no se entera de que la autenticación es propia: `auth:api`, `$request->user()`, los form requests y las policies funcionan sin una línea de adaptación. Un middleware que metiera el usuario en el contenedor parecería equivalente y se rompería en cuanto alguien escribiera una policy.
+
+Un detalle que no es opcional: Laravel cachea las instancias de guard y no las olvida dentro de un mismo proceso, así que la resolución se indexa por **la petición** y no por un booleano. Sin eso, el usuario resuelto en una petición se le entregaría a la siguiente.
+
+### El logout revoca un token, no todos
+
+Cerrar sesión en el móvil no debe cerrarla en el portátil. Pero `$request->user()` devuelve un usuario, no el token con el que llegó, así que es el guard —que fue quien lo encontró— el que lo conserva y lo expone. El controlador se lo pasa al caso de uso, que revoca ese y solo ese.
+
+La alternativa habitual es colgar el token del propio modelo `User` mediante un trait. Se descartó: mutar un modelo para transportar estado de una petición HTTP es acoplamiento en la dirección equivocada.
+
+### Caducidad de 24 horas, y por qué no menos
+
+Los tokens caducan, y la caducidad se comprueba al leerlos. **No hay comando de limpieza**, y es una decisión: un token vencido no sirve para entrar aunque su fila siga ahí, así que lo que queda sin limpiar es espacio, no seguridad.
+
+Tampoco son 4 horas. Sin un mecanismo de refresco, una caducidad corta empuja al cliente a **guardar la contraseña** para poder re-autenticarse, que es peor que la ventana más larga que sustituye. Los sistemas con tokens de una hora traen siempre un refresh token; añadirlo aquí duplicaría la superficie de autenticación sin un caso de uso que lo pida.
+
+### Añadir y quitar favoritos son idempotentes
+
+Marcar un personaje que ya era favorito, o quitar uno que no lo era, responden `204` sin cambiar nada. El cliente no está pidiendo una transición sino **un estado**, y ese estado se cumple igual haya habido que escribir algo o no. El caso real que lo justifica es mundano: un reintento tras una conexión caída, o un doble toque.
+
+La clave primaria compuesta del pivote es la garantía final: aunque dos peticiones llegaran a la vez, la base de datos rechazaría la segunda fila.
+
+### El formato de error extiende el del framework
+
+Laravel ya devuelve `message` en toda respuesta de error, y `errors` cuando falla una validación. Lo único que le falta es algo estable contra lo que un cliente pueda ramificar sin leer prosa, y eso es `code`.
+
+Se añade **decorando la respuesta que construye el framework**, no rendirizando una propia. Así cada estado que Laravel sabe producir hereda el formato sin que nadie tenga que enumerarlos, y ninguno puede quedarse fuera porque ninguno se está reimplementando. Las claves que añade el framework se conservan, de modo que la traza sigue apareciendo mientras se depura.
 
 ### PHP 8.4, no 8.5
 
