@@ -14,9 +14,9 @@ return new class extends Migration
             $table->id();
             $table->string('status')->index();
             // We deliberately break Laravel's convention by omitting $table->timestamps().
-            // Since this is a synchronization history table, the 'created_at' and 
-            // 'updated_at' fields are redundant and lack semantic value. 
-            // Instead, we use 'started_at' and 'finished_at' to accurately represent 
+            // Since this is a synchronization history table, the 'created_at' and
+            // 'updated_at' fields are redundant and lack semantic value.
+            // Instead, we use 'started_at' and 'finished_at' to accurately represent
             // the lifecycle of the process.
             $table->dateTime('started_at');
             $table->dateTime('finished_at')->nullable();
