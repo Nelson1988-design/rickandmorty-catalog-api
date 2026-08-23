@@ -52,6 +52,48 @@ trait ReadsRawRecords
     }
 
     /**
+     * Reads the identifier out of a reference the provider sends as a URL.
+     *
+     * An empty reference means the provider has nothing to point at — it says
+     * so for 300 of the 826 characters — and yields null. A reference that is
+     * present but unreadable does not: dropping it silently would lose a
+     * relation without anyone noticing, so it is raised instead.
+     *
+     * The resource segment is checked as well. Without that check a reference
+     * to /api/character/5 sitting in an origin field would quietly become
+     * location 5, and the wrong row would look perfectly valid afterwards.
+     *
+     * @throws MalformedCatalogPayload
+     */
+    protected function relatedId(string $resource, ?string $url, string $expectedResource): ?int
+    {
+        if ($url === null || trim($url) === '') {
+            return null;
+        }
+
+        if (preg_match('#/api/(?<resource>[a-z]+)/(?<id>\d+)/?$#', trim($url), $matches) !== 1) {
+            throw MalformedCatalogPayload::unexpectedStructure(
+                $resource,
+                sprintf('no identifier can be read from the reference "%s"', $url),
+            );
+        }
+
+        if ($matches['resource'] !== $expectedResource) {
+            throw MalformedCatalogPayload::unexpectedStructure(
+                $resource,
+                sprintf(
+                    'a %s reference was expected but "%s" points at a %s',
+                    $expectedResource,
+                    $url,
+                    $matches['resource'],
+                ),
+            );
+        }
+
+        return (int) $matches['id'];
+    }
+
+    /**
      * Free text that the provider may leave blank.
      *
      * The provider writes "unknown" where it has no value, so that exact string
