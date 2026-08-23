@@ -60,6 +60,14 @@ return [
             'driver' => 'session',
             'provider' => 'users',
         ],
+
+        // The driver is registered by AuthServiceProvider. Declaring it here is
+        // what lets the rest of the application say `auth:api` and never learn
+        // that the implementation behind it is ours.
+        'api' => [
+            'driver' => 'api_token',
+            'provider' => 'users',
+        ],
     ],
 
     /*
