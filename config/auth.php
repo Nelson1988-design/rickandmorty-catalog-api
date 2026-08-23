@@ -22,6 +22,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | API token lifetime
+    |--------------------------------------------------------------------------
+    |
+    | How long an issued API token stays valid, in hours. It is checked when the
+    | token is read, so an expired one stops working the moment it lapses even
+    | though its row is still there — expiry is a security boundary, cleaning up
+    | the rows afterwards would only be housekeeping.
+    |
+    | Deliberately not a short window. Without a refresh token, a token that
+    | lapses in a couple of hours pushes clients into storing the password so
+    | they can log in again, which is worse than the longer window it replaces.
+    |
+    */
+
+    'api_token_lifetime_hours' => (int) env('API_TOKEN_LIFETIME_HOURS', 24),
+
+    /*
+    |--------------------------------------------------------------------------
     | Authentication Guards
     |--------------------------------------------------------------------------
     |
