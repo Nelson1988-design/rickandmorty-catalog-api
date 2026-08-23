@@ -11,6 +11,11 @@ use Symfony\Component\HttpFoundation\Response;
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',
+        // Everything the API exposes lives under /api/v1. The version is there
+        // from the first day because the asymmetry is unforgiving: a /v2 can be
+        // added whenever it is needed, a /v1 cannot be added afterwards without
+        // breaking every client already using the API.
+        api: __DIR__.'/../routes/api.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
