@@ -58,6 +58,14 @@ La primera ejecución construye la imagen de PHP 8.4 y tarda unos minutos.
 
 La aplicación queda disponible en **http://localhost:8080**.
 
+Y para poblar la base de datos con el catálogo completo:
+
+```bash
+./vendor/bin/sail artisan rickmorty:sync
+```
+
+Tarda unos 40 segundos y trae 826 personajes, 51 episodios y 126 localizaciones. El detalle está en [Sincronización](#sincronización).
+
 Para detenerlo todo:
 
 ```bash
@@ -129,6 +137,52 @@ Tres relaciones:
 
 ---
 
+## Sincronización
+
+```bash
+./vendor/bin/sail artisan rickmorty:sync
+```
+
+El comando no acepta opciones. Sincroniza **localizaciones, después episodios, después personajes**, siempre en ese orden y siempre los tres.
+
+```
++-----------+-------+---------+----------+
+| Resource  | Pages | Records | Outcome  |
++-----------+-------+---------+----------+
+| location  | 7     | 126     | complete |
+| episode   | 3     | 51      | complete |
+| character | 42    | 826     | complete |
++-----------+-------+---------+----------+
+```
+
+### Es idempotente
+
+Ejecutarlo varias veces deja la base de datos **exactamente igual**. No es una afirmación de diseño: se verificó sincronizando el catálogo real cuatro veces seguidas y comparando el `CHECKSUM TABLE` de las cuatro tablas antes y después de la última. Los cuatro checksums salieron idénticos sobre 826 personajes, 51 episodios, 126 localizaciones y 1267 relaciones.
+
+Se apoya en tres cosas: `upsert` sobre `external_id` con las columnas a actualizar listadas explícitamente, `sync()` en el pivote —que escribe solo la diferencia— y la ausencia de timestamps, que evita la reescritura silenciosa que los haría cambiar en cada pasada.
+
+### Qué pasa cuando algo falla
+
+| Situación | Comportamiento |
+|---|---|
+| Una página no se descarga o no se puede leer | Ese recurso se detiene. Lo ya escrito queda confirmado y la ejecución se marca como `partial` |
+| Un personaje referencia algo no sincronizado | La ejecución **aborta**: significa que la pasada anterior quedó incompleta |
+| Todo termina | La ejecución se marca `completed` |
+
+**Los códigos de salida distinguen los tres casos:** `0` solo cuando la sincronización fue completa, `1` en cualquier otro caso. Una ejecución parcial no es un éxito, y un planificador que solo lea el código tiene que poder notarlo.
+
+Cada ejecución queda registrada en la tabla `sync_runs` con su estado, sus marcas de tiempo, el motivo si algo se detuvo y cuántas páginas y registros escribió cada recurso. El comportamiento ante fallos parciales no es solo una promesa de este README: es una fila que se puede consultar.
+
+### Es aditiva
+
+Si un registro desaparece de la API externa, **su fila permanece en la base de datos**. La sincronización no borra ni marca por ausencia. Está explicado en las decisiones de diseño.
+
+### El ritmo
+
+La API externa aplica un límite de peticiones, así que el cliente espera 600 ms entre páginas. Es un valor medido, no estimado: sin espera la sincronización se corta en la petición 31, con 250 ms llega a la 44, y con 600 ms completa las 52. Se ajusta con `RICKANDMORTY_PAGE_DELAY`.
+
+---
+
 ## Tests
 
 ```bash
@@ -140,6 +194,8 @@ La suite se ejecuta contra **MySQL real**, no contra SQLite, en una base de dato
 Las pruebas del cliente externo **no pueden alcanzar la red**: además de `Http::fake()` usan `Http::preventStrayRequests()`, que convierte en fallo cualquier petición no falseada. Una URL mal construida no se escapa a internet y pasa por casualidad: falla.
 
 Los mappers y los objetos de dominio se prueban sin arrancar siquiera el framework. Esa diferencia es deliberada y hace visible dónde están los acoplamientos: el único componente de esta capa cuyo test necesita el contenedor es el validador, porque lee configuración.
+
+La suite está organizada en capas: cada pieza se prueba sustituyendo por un doble la frontera que le toca —la red para el cliente HTTP, el puerto entero para los sincronizadores y el caso de uso— y **un único test recorre la cadena completa** con el adaptador real dentro, falseando solo la red. Ese último cubre la costura que los demás dejan libre: que las piezas encajen de verdad.
 
 ---
 
@@ -212,6 +268,28 @@ Estas tres tablas son una proyección de un catálogo ajeno, no entidades con ci
 Solo sobre `characters.status` y `characters.species`, que son los filtros del listado y se consultan por igualdad exacta sobre campos de baja cardinalidad.
 
 **No hay índice sobre `characters.name`** a propósito. La búsqueda por nombre que espera un usuario encuentra «Toxic Rick» al escribir «Rick», es decir `LIKE '%rick%'`, y un índice B-tree no optimiza comodines por la izquierda: el motor recorre la tabla igualmente. Un índice que nunca se usa ocupa espacio y ralentiza cada escritura de la sincronización.
+
+### El orden de sincronización es una restricción, no una preferencia
+
+Los personajes referencian localizaciones y episodios, y llegan con los identificadores del proveedor en lugar de con los nuestros. Traducirlos exige que las otras dos tablas ya estén pobladas, así que el orden es lo que hace posible la traducción.
+
+Y la hace **barata**: los dos diccionarios `external_id → id` se cargan una vez antes de la primera página, con dos consultas en lugar de las 1652 que costaría resolver cada referencia por separado.
+
+El orden está escrito como una lista literal en el caso de uso, no como un comentario, para que no pueda desviarse por descuido.
+
+### Qué se detiene y qué aborta
+
+Una página que no se puede descargar **detiene su recurso** y nada más: lo ya escrito queda confirmado y la ejecución se marca como parcial. No es una elección, además — con paginación por cursor, la única ruta hacia la página siguiente es el testigo que venía dentro de la anterior, así que una página perdida rompe la cadena.
+
+Un registro ilegible detiene la página entera en lugar de saltarse solo ese registro. La unidad atómica de escritura ya es la página; tratarla como divisible para leer rompería esa simetría. Y en una API REST un campo malformado casi nunca es un error aislado: es el síntoma de un cambio de esquema, y salvar los registros «sanos» de una página corrupta enmascararía el problema en vez de señalarlo.
+
+Una referencia a algo que no se sincronizó **aborta la ejecución completa**, porque solo puede significar que la pasada anterior quedó incompleta. Continuar sería seguir construyendo sobre terreno que ya se sabe incompleto.
+
+### La orquestación vive fuera del comando
+
+El comando de consola es un adaptador de entrada, igual que el cliente HTTP es uno de salida: recibe la invocación, llama al caso de uso y presenta el resultado. Con la lógica fuera, la sincronización completa se prueba inyectando un doble del puerto, sin ejecutar Artisan y sin red.
+
+Tampoco acepta opciones. Un `--resource=character` permitiría saltarse una pasada de la que depende la siguiente, que es justo lo que las claves foráneas convierten en un aborto: un botón que rompe una restricción de corrección no es una funcionalidad.
 
 ### PHP 8.4, no 8.5
 
