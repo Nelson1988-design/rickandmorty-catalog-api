@@ -8,7 +8,7 @@ API en Laravel que sincroniza el catálogo de la [API pública de Rick and Morty
 
 | | |
 |---|---|
-| Framework | Laravel 13.17 |
+| Framework | Laravel 13.26 |
 | PHP | 8.4 |
 | Base de datos | MySQL 8.4 |
 | Entorno | Laravel Sail (Docker Compose) |
