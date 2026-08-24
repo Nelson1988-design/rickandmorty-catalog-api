@@ -403,8 +403,7 @@ Protección de la idempotencia: Si actualizáramos una fecha con now() en cada p
 
 Cero excusas: Prescindir de esta columna es lo que permite demostrar la idempotencia real: el CHECKSUM TABLE de las cuatro tablas es idéntico byte a byte tras varias ejecuciones.
 
-Gestión del alcance: Detectar bajas del proveedor es útil, pero el enunciado no lo exige. Se priorizó no pagar el coste de una escritura constante para sostener una garantía que la prueba no
-requeria 
+Gestión del alcance: Detectar bajas del proveedor es útil, pero el enunciado no lo exige. Se priorizó no pagar el coste de una escritura constante para sostener una garantía que la prueba no requería.
 
 ### Índices
 
