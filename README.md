@@ -396,8 +396,7 @@ Es una decisión, no un descuido. Un borrado por omisión asume que cada ejecuci
 
 Estas tres tablas son una proyección de un catálogo ajeno, no entidades con ciclo de vida propio en esta aplicación. Se han quitado los timestamps en vez de arrastrar una columna que iba a mentir en cualquiera de los dos escenarios.
 
-**Sin marca de «última vez visto» por registro**,
-Si el proveedor deja de enviar un personaje, hoy no hay forma de saberlo en nuestra base de datos. Esta limitación es una decisión arquitectónica consciente por los siguientes motivos:
+**Sin marca de «última vez visto» por registro.** Si el proveedor deja de enviar un personaje, hoy no hay forma de saberlo en nuestra base de datos. Esta limitación es una decisión arquitectónica consciente por los siguientes motivos:
 
 Protección de la idempotencia: Si actualizáramos una fecha con now() en cada pasada, forzaríamos al motor a reescribir las 1003 filas del catálogo cada vez, forzando un I/O masivo por datos que en realidad no han cambiado.
 
