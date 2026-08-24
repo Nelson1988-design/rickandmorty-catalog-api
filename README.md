@@ -214,7 +214,7 @@ Cada ejecución queda registrada en la tabla `sync_runs` con su estado, sus marc
 
 ### Es aditiva
 
-Si un registro desaparece de la API externa, **su fila permanece en la base de datos**. La sincronización no borra ni marca por ausencia. Está explicado en las decisiones de diseño.
+Si un registro desaparece de la API externa, **su fila permanece en la base de datos**, sin ninguna marca de última vez visto. La sincronización no borra ni marca por ausencia — es una decisión a favor de la idempotencia estricta, no un descuido, explicada en [Decisiones de diseño](#las-tablas-del-catálogo-no-llevan-timestamps).
 
 ### El ritmo
 
@@ -395,6 +395,16 @@ Es una decisión, no un descuido. Un borrado por omisión asume que cada ejecuci
 `Eloquent\Builder::upsert()` añade `updated_at` a las columnas que actualiza, siempre. Eso deja dos comportamientos y ninguno bueno: mantener la columna significa reescribirla en cada ejecución aunque no cambie nada, y excluirla del `upsert` significa que conserva la fecha del insert original incluso cuando el registro sí cambia.
 
 Estas tres tablas son una proyección de un catálogo ajeno, no entidades con ciclo de vida propio en esta aplicación. Se han quitado los timestamps en vez de arrastrar una columna que iba a mentir en cualquiera de los dos escenarios.
+
+**Sin marca de «última vez visto» por registro**,
+Si el proveedor deja de enviar un personaje, hoy no hay forma de saberlo en nuestra base de datos. Esta limitación es una decisión arquitectónica consciente por los siguientes motivos:
+
+Protección de la idempotencia: Si actualizáramos una fecha con now() en cada pasada, forzaríamos al motor a reescribir las 1003 filas del catálogo cada vez, forzando un I/O masivo por datos que en realidad no han cambiado.
+
+Cero excusas: Prescindir de esta columna es lo que permite demostrar la idempotencia real: el CHECKSUM TABLE de las cuatro tablas es idéntico byte a byte tras varias ejecuciones.
+
+Gestión del alcance: Detectar bajas del proveedor es útil, pero el enunciado no lo exige. Se priorizó no pagar el coste de una escritura constante para sostener una garantía que la prueba no
+requeria 
 
 ### Índices
 
