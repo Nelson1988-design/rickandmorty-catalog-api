@@ -4,6 +4,19 @@ API en Laravel que sincroniza el catálogo de la [API pública de Rick and Morty
 
 ---
 
+## Alcance
+
+Los cinco bloques obligatorios del enunciado están completos. De las mejoras opcionales:
+
+| Mejora | | |
+|---|:---:|---|
+| Autenticación por tokens sin paquetes de terceros | ✓ | Guard nativo — ver [Autenticación](#autenticación) |
+| Cobertura de tests más allá de lo exigido | ✓ | 177 tests — ver [Tests](#tests) |
+| Cualquier decisión de diseño bien fundamentada | ✓ | Toda la sección [Decisiones de diseño](#decisiones-de-diseño) |
+| Persistencia del JSON crudo de la fuente externa | — | Evaluada y descartada: exigía un flag `--from-cache`, bifurcar el caso de uso de sincronización y cargar con blobs en disco, a cambio de un bonus que no toca ningún bloque obligatorio |
+
+---
+
 ## Stack
 
 | | |
@@ -86,29 +99,53 @@ Debe responder `200`.
 
 ## Arquitectura
 
-Tres capas, cada una con una regla:
+Tres capas de dominio, cada una con una regla, más el cascarón de Laravel que las conecta con HTTP y persistencia:
 
 | Capa | Contiene | Regla |
 |---|---|---|
-| `app/Domain/` | Contratos, objetos de datos, enums y excepciones del catálogo | No conoce a nadie: ni HTTP, ni Eloquent, ni Laravel |
-| `app/Infrastructure/` | El cliente de la API externa, sus mappers y su validador | Implementa los contratos del dominio |
-| `app/Providers/` | El enlace entre ambos | Una línea |
+| `app/Domain/` | Contratos, objetos de datos, enums y excepciones — del catálogo externo y de la sincronización | No conoce a nadie: ni HTTP, ni Eloquent, ni Laravel |
+| `app/Application/` | Casos de uso: sincronizar el catálogo, autenticar, gestionar favoritos, listar con filtros | Depende de `Domain/`, nunca al revés |
+| `app/Infrastructure/` | El cliente de la API externa y el guard de autenticación | Implementa contratos: el propio (`CatalogProvider`) y el de Laravel (`Guard`) |
+| `app/Models/` · `app/Http/` | Eloquent, controladores finos, Requests, Resources | Traducen entre HTTP/base de datos y los casos de uso |
 
 ```
 app/
-├── Domain/Catalog/
-│   ├── Contracts/CatalogProvider.php      ← el puerto
-│   ├── Data/                              ← objetos propios del dominio
-│   ├── Enums/
-│   └── Exceptions/
-├── Infrastructure/RickAndMorty/
-│   ├── RickAndMortyProvider.php           ← el adaptador; único sitio con Http::
-│   ├── Mappers/                           ← JSON del proveedor a objeto de dominio
-│   └── PayloadValidator.php
-└── Providers/CatalogServiceProvider.php   ← el enlace
+├── Domain/
+│   ├── Catalog/                             ← el catálogo externo
+│   │   ├── Contracts/CatalogProvider.php    ← el puerto
+│   │   ├── Data/, Enums/, Exceptions/
+│   └── Sync/                                ← qué reporta una sincronización de sí misma
+│       ├── Data/ResourceReport.php
+│       ├── Enums/SyncRunStatus.php
+│       └── Exceptions/IncompleteCatalog.php
+│
+├── Application/
+│   ├── Sync/SyncCatalogUseCase.php          ← orquesta el orden y los fallos parciales
+│   │   └── Synchronizers/{Location,Episode,Character}Synchronizer.php
+│   ├── Auth/{Register,Login,Logout}UserUseCase.php
+│   ├── Favorites/{Add,List,Remove}FavoriteUseCase.php
+│   └── Catalog/ListCharactersUseCase.php
+│
+├── Infrastructure/
+│   ├── RickAndMorty/                        ← único sitio con Http::
+│   │   ├── RickAndMortyProvider.php         ← el adaptador
+│   │   ├── Mappers/
+│   │   └── PayloadValidator.php
+│   └── Auth/ApiTokenGuard.php               ← el guard nativo
+│
+├── Models/                                  ← Eloquent, persistencia pura
+├── Console/Commands/SyncCatalogCommand.php
+├── Http/
+│   ├── Controllers/Api/V1/                  ← uno por recurso, sin lógica
+│   ├── Requests/Api/V1/                     ← validación de entrada
+│   ├── Resources/                           ← forma de las respuestas
+│   └── ErrorCode.php                        ← el sobre de error homogéneo
+└── Providers/
+    ├── CatalogServiceProvider.php           ← CatalogProvider → RickAndMortyProvider
+    └── AuthServiceProvider.php              ← registra el guard api_token
 ```
 
-La frontera cabe en una línea:
+La frontera cabe en una línea, y el patrón se repite dos veces. Para el catálogo:
 
 ```php
 $this->app->bind(CatalogProvider::class, RickAndMortyProvider::class);
@@ -116,7 +153,9 @@ $this->app->bind(CatalogProvider::class, RickAndMortyProvider::class);
 
 A partir de ahí, cualquier consumidor pide un `CatalogProvider` y **no sabe que existe Rick and Morty**. Sustituir la fuente significa escribir otro adaptador y cambiar esa línea.
 
-La regla que lo sostiene: **el JSON del proveedor solo existe dentro de `Infrastructure/RickAndMorty/`**. En cuanto sale de ahí ya es un objeto propio, y nada por encima de esa frontera —tampoco las excepciones— habla el idioma del proveedor ni el del framework.
+Para la autenticación, la misma idea aplicada al contrato de Laravel: `Auth::extend('api_token', ...)` registra `ApiTokenGuard` como driver, y desde ahí `auth:api`, `$request->user()` y las policies no saben que la autenticación es propia. El porqué está en [Decisiones de diseño](#autenticación-propia-sin-paquetes-de-terceros).
+
+La regla que sostiene la primera frontera: **el JSON del proveedor solo existe dentro de `Infrastructure/RickAndMorty/`**. En cuanto sale de ahí ya es un objeto propio, y nada por encima de esa frontera —tampoco las excepciones— habla el idioma del proveedor ni el del framework.
 
 ---
 
