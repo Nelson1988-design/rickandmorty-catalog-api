@@ -187,6 +187,12 @@ La API externa aplica un límite de peticiones, así que el cliente espera 600 m
 
 Todo cuelga de `http://localhost:8080/api/v1`.
 
+El contrato completo está en **[`openapi.yaml`](openapi.yaml)**, en la raíz del repositorio, escrito a mano y sin ningún paquete que lo genere ni visor servido desde la aplicación. Se importa tal cual en Swagger Editor, Postman o Insomnia.
+
+Que siga siendo cierto no depende de que alguien se acuerde: hay tests que comparan el documento con las rutas registradas y fallan si aparece un endpoint sin documentar, uno documentado que no existe, o uno cuya protección no coincide con la declarada.
+
+Lo que sigue es el resumen; el detalle está en el contrato.
+
 ### Autenticación
 
 Registrarse devuelve la cuenta y un token. **Es el único momento en que el token es legible**: en la base de datos solo queda su hash.
@@ -412,6 +418,12 @@ La clave primaria compuesta del pivote es la garantía final: aunque dos peticio
 Laravel ya devuelve `message` en toda respuesta de error, y `errors` cuando falla una validación. Lo único que le falta es algo estable contra lo que un cliente pueda ramificar sin leer prosa, y eso es `code`.
 
 Se añade **decorando la respuesta que construye el framework**, no rendirizando una propia. Así cada estado que Laravel sabe producir hereda el formato sin que nadie tenga que enumerarlos, y ninguno puede quedarse fuera porque ninguno se está reimplementando. Las claves que añade el framework se conservan, de modo que la traza sigue apareciendo mientras se depura.
+
+### La documentación es un fichero, no un paquete
+
+El contrato vive en `openapi.yaml`, escrito a mano. No se instaló ningún generador ni ningún visor: una API REST no necesita dependencias de vistas para documentarse a sí misma, y cualquier consumidor abre ese fichero en la herramienta que ya usa.
+
+Lo que evita que envejezca no es la disciplina, son tres tests: uno comprueba que toda ruta registrada está documentada, otro que todo endpoint documentado existe de verdad, y el tercero —el que más importa— que lo que el documento llama protegido es exactamente lo que el router protege. Documentar como abierto un endpoint que pide token es peor que no documentarlo: invita a construir contra una respuesta que nunca llegará.
 
 ### PHP 8.4, no 8.5
 

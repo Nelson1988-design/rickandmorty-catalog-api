@@ -1,0 +1,697 @@
+# Contrato de la API, escrito a mano.
+#
+# Sin paquetes que lo generen ni visor servido desde la aplicación: una API REST
+# no necesita dependencias de vistas para documentarse a sí misma. Este fichero
+# se importa tal cual en Swagger Editor, Postman o Insomnia.
+#
+# Versión 3.0.3 y no 3.1: aquí no se usa nada de JSON Schema que 3.1 aporte, y
+# 3.0.3 se abre sin fricción en cualquier herramienta.
+
+openapi: 3.0.3
+
+info:
+  title: Rick and Morty Catalog API
+  version: 1.0.0
+  description: |
+    Catálogo de Rick and Morty sincronizado en una base de datos propia, con
+    endpoints de consulta y gestión de favoritos por usuario.
+
+    **Identificadores.** Las URLs usan los identificadores de esta aplicación.
+    El del proveedor externo viaja en cada respuesta como `external_id`, para
+    quien quiera alinear ambos catálogos.
+
+    **Errores.** Toda respuesta de error lleva `message` y `code`; `errors`
+    aparece solo cuando hay errores de campo.
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Entorno local levantado con Laravel Sail
+
+tags:
+  - name: Autenticación
+    description: Registro, inicio y cierre de sesión mediante tokens
+  - name: Catálogo
+    description: Consulta de los datos sincronizados. No requiere token
+  - name: Favoritos
+    description: Los personajes marcados por el usuario autenticado
+
+# Por defecto todo exige token. Los endpoints del catálogo se salen de la regla
+# declarando `security: []`, que es más difícil de olvidar que lo contrario:
+# olvidar añadir seguridad documenta un endpoint como abierto, olvidar quitarla
+# solo lo documenta como cerrado.
+security:
+  - bearerToken: []
+
+paths:
+  /register:
+    post:
+      tags: [Autenticación]
+      summary: Crear una cuenta
+      description: Crea el usuario y devuelve un token. Es el único momento en que el token es legible.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name:
+                  type: string
+                  maxLength: 255
+                  example: Nelson
+                email:
+                  type: string
+                  format: email
+                  maxLength: 255
+                  example: nelson@example.test
+                password:
+                  type: string
+                  minLength: 8
+                  example: a-password-nobody-guesses
+      responses:
+        '201':
+          description: Cuenta creada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticationResponse'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /login:
+    post:
+      tags: [Autenticación]
+      summary: Iniciar sesión
+      description: |
+        Devuelve un token nuevo sin invalidar los ya emitidos: iniciar sesión en
+        un segundo dispositivo no cierra la sesión del primero.
+
+        Limitado a 5 intentos por minuto.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: nelson@example.test
+                password:
+                  type: string
+                  example: a-password-nobody-guesses
+      responses:
+        '200':
+          description: Sesión iniciada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticationResponse'
+        '422':
+          description: |
+            Credenciales incorrectas o petición mal formada. La respuesta es
+            idéntica tanto si la dirección no existe como si la contraseña no
+            coincide, para no revelar qué cuentas están registradas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /logout:
+    post:
+      tags: [Autenticación]
+      summary: Cerrar sesión
+      description: Revoca únicamente el token con el que se hizo la llamada. Las demás sesiones siguen activas.
+      responses:
+        '204':
+          description: Token revocado
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /characters:
+    get:
+      tags: [Catálogo]
+      summary: Listar personajes
+      description: |
+        Los filtros se combinan entre sí. Un valor no reconocido en `status`
+        devuelve 422 en lugar de ignorarse.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - name: name
+          in: query
+          description: Coincidencia parcial. `rick` encuentra también «Toxic Rick».
+          schema:
+            type: string
+            maxLength: 255
+          example: rick
+        - name: status
+          in: query
+          description: Coincidencia exacta. No distingue mayúsculas.
+          schema:
+            type: string
+            enum: [alive, dead, unknown]
+          example: dead
+        - name: species
+          in: query
+          description: Coincidencia exacta.
+          schema:
+            type: string
+            maxLength: 255
+          example: Human
+      responses:
+        '200':
+          description: Página de personajes
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Character'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+
+  /characters/{character}:
+    get:
+      tags: [Catálogo]
+      summary: Detalle de un personaje
+      description: Añade la lista de episodios a los campos del listado.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/CharacterId'
+      responses:
+        '200':
+          description: El personaje
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CharacterDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /episodes:
+    get:
+      tags: [Catálogo]
+      summary: Listar episodios
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: Página de episodios
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Episode'
+
+  /episodes/{episode}:
+    get:
+      tags: [Catálogo]
+      summary: Detalle de un episodio
+      description: Añade los personajes que aparecen en él.
+      security: []
+      parameters:
+        - name: episode
+          in: path
+          required: true
+          description: Identificador interno del episodio.
+          schema:
+            type: integer
+            minimum: 1
+          example: 1
+      responses:
+        '200':
+          description: El episodio
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/EpisodeDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /locations:
+    get:
+      tags: [Catálogo]
+      summary: Listar localizaciones
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: Página de localizaciones
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Location'
+
+  /locations/{location}:
+    get:
+      tags: [Catálogo]
+      summary: Detalle de una localización
+      description: |
+        Añade los residentes, que son los personajes cuya **ubicación actual**
+        es esta. Haber nacido aquí no convierte a nadie en residente.
+
+        Treinta y dos localizaciones no tienen ninguno: la respuesta es una
+        lista vacía, no un error.
+      security: []
+      parameters:
+        - name: location
+          in: path
+          required: true
+          description: Identificador interno de la localización.
+          schema:
+            type: integer
+            minimum: 1
+          example: 3
+      responses:
+        '200':
+          description: La localización
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/LocationDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /favorites:
+    get:
+      tags: [Favoritos]
+      summary: Listar mis favoritos
+      description: Ordenados por fecha de marcado, del más reciente al más antiguo.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: Página de favoritos
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Character'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /favorites/{character}:
+    post:
+      tags: [Favoritos]
+      summary: Marcar un personaje como favorito
+      description: |
+        Idempotente: marcar uno que ya lo era responde igual y no cambia nada.
+        El cliente pide un estado, no una transición.
+      parameters:
+        - $ref: '#/components/parameters/CharacterId'
+      responses:
+        '204':
+          description: El personaje está entre los favoritos
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Favoritos]
+      summary: Quitar un personaje de favoritos
+      description: 'Idempotente por el mismo motivo: quitar uno que no lo era tampoco es un error.'
+      parameters:
+        - $ref: '#/components/parameters/CharacterId'
+      responses:
+        '204':
+          description: El personaje no está entre los favoritos
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerToken:
+      type: http
+      scheme: bearer
+      description: |
+        El token que devuelven `/register` y `/login`, en la cabecera
+        `Authorization: Bearer <token>`. Caduca a las 24 horas.
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      description: Página a devolver. El tamaño es fijo, 20 elementos.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    CharacterId:
+      name: character
+      in: path
+      required: true
+      description: Identificador interno del personaje, no el del proveedor externo.
+      schema:
+        type: integer
+        minimum: 1
+      example: 1
+
+  responses:
+    Unauthenticated:
+      description: Falta el token, no existe o ha caducado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            message: Unauthenticated.
+            code: unauthenticated
+
+    NotFound:
+      description: No existe ningún registro con ese identificador
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            message: 'No query results for model [App\Models\Character] 4242'
+            code: not_found
+
+    ValidationFailed:
+      description: La petición no cumple las reglas de validación
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationError'
+
+    TooManyRequests:
+      description: Se ha superado el límite de intentos
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            message: Too Many Attempts.
+            code: too_many_requests
+
+  schemas:
+    Error:
+      type: object
+      required: [message, code]
+      properties:
+        message:
+          type: string
+          description: Texto legible. Puede cambiar de redacción; no conviene ramificar sobre él.
+        code:
+          type: string
+          description: Identificador estable, derivado del estado HTTP. Es lo que un cliente debe mirar.
+          enum:
+            - bad_request
+            - unauthenticated
+            - forbidden
+            - not_found
+            - method_not_allowed
+            - conflict
+            - validation_failed
+            - too_many_requests
+            - client_error
+            - server_error
+
+    ValidationError:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+        - type: object
+          required: [errors]
+          properties:
+            errors:
+              type: object
+              description: Mensajes por campo.
+              additionalProperties:
+                type: array
+                items:
+                  type: string
+          example:
+            message: The email field is required.
+            code: validation_failed
+            errors:
+              email:
+                - The email field is required.
+
+    User:
+      type: object
+      required: [id, name, email]
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Nelson
+        email:
+          type: string
+          format: email
+          example: nelson@example.test
+
+    AuthenticationResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+          description: 40 caracteres. Solo se muestra aquí; la base de datos guarda su hash.
+          example: bCeqdrYUwr7dQ2mKpXvN8sJhFt3LzRbW5yGcAeUx
+        user:
+          $ref: '#/components/schemas/User'
+
+    Character:
+      type: object
+      description: Un personaje tal y como aparece en los listados.
+      required: [id, external_id, name, status, gender, origin, location]
+      properties:
+        id:
+          type: integer
+          description: Identificador de esta aplicación. Es el que usan las URLs.
+          example: 1
+        external_id:
+          type: integer
+          description: Identificador en el catálogo del proveedor.
+          example: 1
+        name:
+          type: string
+          example: Rick Sanchez
+        status:
+          type: string
+          enum: [alive, dead, unknown]
+          description: '`unknown` es un valor real, no una ausencia: la serie no establece el estado de 100 personajes.'
+          example: alive
+        species:
+          type: string
+          nullable: true
+          example: Human
+        type:
+          type: string
+          nullable: true
+          description: Vacío en casi la mitad del catálogo, en cuyo caso llega como null.
+          example: null
+        gender:
+          type: string
+          enum: [female, male, genderless, unknown]
+          example: male
+        image:
+          type: string
+          nullable: true
+          format: uri
+          example: https://rickandmortyapi.com/api/character/avatar/1.jpeg
+        origin:
+          allOf:
+            - $ref: '#/components/schemas/Location'
+          nullable: true
+          description: De dónde viene. Null en 300 de los 826 personajes.
+        location:
+          allOf:
+            - $ref: '#/components/schemas/Location'
+          nullable: true
+          description: Dónde está ahora. Es la referencia de la que se derivan los residentes.
+
+    CharacterDetail:
+      allOf:
+        - $ref: '#/components/schemas/Character'
+        - type: object
+          required: [episodes]
+          properties:
+            episodes:
+              type: array
+              items:
+                $ref: '#/components/schemas/Episode'
+
+    Episode:
+      type: object
+      required: [id, external_id, name]
+      properties:
+        id:
+          type: integer
+          example: 1
+        external_id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Pilot
+        code:
+          type: string
+          nullable: true
+          description: No se valida contra un patrón; se guarda lo que envía el proveedor.
+          example: S01E01
+        air_date:
+          type: string
+          format: date
+          nullable: true
+          description: Null si la fecha original no se pudo interpretar, en cuyo caso sigue disponible en `air_date_raw`.
+          example: '2013-12-02'
+        air_date_raw:
+          type: string
+          nullable: true
+          description: La cadena tal y como la envía el proveedor.
+          example: December 2, 2013
+
+    EpisodeDetail:
+      allOf:
+        - $ref: '#/components/schemas/Episode'
+        - type: object
+          required: [characters]
+          properties:
+            characters:
+              type: array
+              items:
+                $ref: '#/components/schemas/Character'
+
+    Location:
+      type: object
+      required: [id, external_id, name]
+      properties:
+        id:
+          type: integer
+          example: 3
+        external_id:
+          type: integer
+          example: 3
+        name:
+          type: string
+          example: Citadel of Ricks
+        type:
+          type: string
+          nullable: true
+          example: Space station
+        dimension:
+          type: string
+          nullable: true
+          description: 'Null cuando el proveedor no lo sabe. Ojo: «Unknown dimension» es el nombre real de dos dimensiones y sí se conserva.'
+          example: Dimension C-137
+
+    LocationDetail:
+      allOf:
+        - $ref: '#/components/schemas/Location'
+        - type: object
+          required: [residents]
+          properties:
+            residents:
+              type: array
+              description: Los personajes cuya ubicación actual es esta. Puede estar vacía.
+              items:
+                $ref: '#/components/schemas/Character'
+
+    PaginatedEnvelope:
+      type: object
+      required: [data, links, meta]
+      properties:
+        data:
+          type: array
+          items: {}
+        links:
+          type: object
+          properties:
+            first:
+              type: string
+              nullable: true
+            last:
+              type: string
+              nullable: true
+            prev:
+              type: string
+              nullable: true
+            next:
+              type: string
+              nullable: true
+        meta:
+          type: object
+          properties:
+            current_page:
+              type: integer
+              example: 1
+            from:
+              type: integer
+              nullable: true
+              example: 1
+            last_page:
+              type: integer
+              example: 42
+            path:
+              type: string
+            per_page:
+              type: integer
+              example: 20
+            to:
+              type: integer
+              nullable: true
+              example: 20
+            total:
+              type: integer
+              example: 826
+            links:
+              type: array
+              items:
+                type: object
+                properties:
+                  url:
+                    type: string
+                    nullable: true
+                  label:
+                    type: string
+                  active:
+                    type: boolean
